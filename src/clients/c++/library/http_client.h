@@ -36,6 +36,19 @@
 #include "rapidjson/stringbuffer.h"
 #include "src/clients/c++/library/common.h"
 
+#ifdef TRITON_ENABLE_GPU
+#include <cuda_runtime_api.h>
+#else
+struct cudaIpcMemHandle_t {
+};
+#endif  // TRITON_ENABLE_GPU
+
+#define TRITONJSON_STATUSTYPE nvidia::inferenceserver::client::Error
+#define TRITONJSON_STATUSRETURN(M) \
+  return nvidia::inferenceserver::client::Error(M)
+#define TRITONJSON_STATUSSUCCESS nvidia::inferenceserver::client::Error::Success
+#include "src/core/json.h"
+
 namespace nvidia { namespace inferenceserver { namespace client {
 
 class HttpInferRequest;
@@ -51,6 +64,7 @@ typedef std::map<std::string, std::string> Parameters;
 /// \param json_dom The json DOM object.
 /// \return Formatted string representation of passed JSON.
 std::string GetJsonText(const rapidjson::Document& json_dom);
+std::string GetJsonText(const TritonJson::Value& json_dom);
 
 //==============================================================================
 /// An InferenceServerHttpClient object is used to perform any kind of
@@ -120,19 +134,20 @@ class InferenceServerHttpClient : public InferenceServerClient {
       const Parameters& query_params = Parameters());
 
   /// Contact the inference server and get its metadata.
-  /// \param server_metadata Returns the server metadata as rapidJSON DOM
-  /// object.
+  /// \param server_metadata Returns JSON representation of the
+  /// metadata as a string.
   /// \param headers Optional map specifying additional HTTP headers to
   /// include in request.
   /// \param query_params Optional map specifying parameters that must be
   /// included with URL query.
   /// \return Error object indicating success or failure of the request.
   Error ServerMetadata(
-      rapidjson::Document* server_metadata, const Headers& headers = Headers(),
+      std::string* server_metadata, const Headers& headers = Headers(),
       const Parameters& query_params = Parameters());
 
   /// Contact the inference server and get the metadata of specified model.
-  /// \param model_metadata Returns model metadata as rapidJSON DOM object.
+  /// \param model_metadata Returns JSON representation of model
+  /// metadata as a string.
   /// \param model_name The name of the model to get metadata.
   /// \param model_version The version of the model to get metadata.
   /// The default value is an empty string which means then the server will
@@ -143,12 +158,13 @@ class InferenceServerHttpClient : public InferenceServerClient {
   /// included with URL query.
   /// \return Error object indicating success or failure of the request.
   Error ModelMetadata(
-      rapidjson::Document* model_metadata, const std::string& model_name,
+      std::string* model_metadata, const std::string& model_name,
       const std::string& model_version = "", const Headers& headers = Headers(),
       const Parameters& query_params = Parameters());
 
   /// Contact the inference server and get the configuration of specified model.
-  /// \param model_config Returns model config as rapidJSON DOM object.
+  /// \param model_config Returns JSON representation of model
+  /// configuration as a string.
   /// \param model_name The name of the model to get configuration.
   /// \param model_version The version of the model to get configuration.
   /// The default value is an empty string which means then the server will
@@ -159,7 +175,7 @@ class InferenceServerHttpClient : public InferenceServerClient {
   /// included with URL query.
   /// \return Error object indicating success or failure of the request.
   Error ModelConfig(
-      rapidjson::Document* model_config, const std::string& model_name,
+      std::string* model_config, const std::string& model_name,
       const std::string& model_version = "", const Headers& headers = Headers(),
       const Parameters& query_params = Parameters());
 
@@ -388,6 +404,9 @@ class InferenceServerHttpClient : public InferenceServerClient {
       std::string& request_uri, const Headers& headers,
       const Parameters& query_params, rapidjson::Document* response,
       long* http_code);
+  Error Get(
+      std::string& request_uri, const Headers& headers,
+      const Parameters& query_params, std::string* response, long* http_code);
   Error Post(
       std::string& request_uri, const rapidjson::Document& request,
       const Headers& headers, const Parameters& query_params,

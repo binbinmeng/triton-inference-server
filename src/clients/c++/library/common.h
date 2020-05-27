@@ -42,13 +42,6 @@
 #include <thread>
 #include <vector>
 
-#ifdef TRITON_ENABLE_GPU
-#include <cuda_runtime_api.h>
-#else
-struct cudaIpcMemHandle_t {
-};
-#endif  // TRITON_ENABLE_GPU
-
 namespace nvidia { namespace inferenceserver { namespace client {
 
 class InferResult;

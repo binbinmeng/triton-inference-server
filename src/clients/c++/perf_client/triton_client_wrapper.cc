@@ -24,9 +24,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
 #include "src/clients/c++/perf_client/triton_client_wrapper.h"
 
+#include "src/clients/c++/examples/json_utils.h"
 
 //==============================================================================
 
@@ -74,8 +74,10 @@ TritonClientWrapper::ModelMetadata(
     const std::string& model_version)
 {
   if (protocol_ == ProtocolType::HTTP) {
+    std::string metadata;
     RETURN_IF_ERROR(client_.http_client_->ModelMetadata(
-        model_metadata, model_name, model_version, *http_headers_));
+        &metadata, model_name, model_version, *http_headers_));
+    RETURN_IF_ERROR(nic::ParseJson(model_metadata, metadata));
   } else {
     return nic::Error("gRPC can not return model metadata as json");
   }
@@ -105,8 +107,10 @@ TritonClientWrapper::ModelConfig(
     const std::string& model_version)
 {
   if (protocol_ == ProtocolType::HTTP) {
+    std::string config;
     RETURN_IF_ERROR(client_.http_client_->ModelConfig(
-        model_config, model_name, model_version, *http_headers_));
+        &config, model_name, model_version, *http_headers_));
+    RETURN_IF_ERROR(nic::ParseJson(model_config, config));
   } else {
     return nic::Error("gRPC can not return model config as json");
   }

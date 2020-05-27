@@ -123,6 +123,14 @@ GetJsonText(const rapidjson::Document& json_dom)
   return buffer.GetString();
 }
 
+std::string
+GetJsonText(const TritonJson::Value& json_dom)
+{
+  TritonJson::WriteBuffer buffer;
+  json_dom.PrettyWrite(&buffer);
+  return std::move(buffer.MutableContents());
+}
+
 //==============================================================================
 
 class HttpInferRequest : public InferRequest {
@@ -582,7 +590,7 @@ InferenceServerHttpClient::IsServerLive(
   std::string request_uri(url_ + "/v2/health/live");
 
   long http_code;
-  rapidjson::Document response;
+  std::string response;
   err = Get(request_uri, headers, query_params, &response, &http_code);
 
   *live = (http_code == 200) ? true : false;
@@ -599,7 +607,7 @@ InferenceServerHttpClient::IsServerReady(
   std::string request_uri(url_ + "/v2/health/live");
 
   long http_code;
-  rapidjson::Document response;
+  std::string response;
   err = Get(request_uri, headers, query_params, &response, &http_code);
 
   *ready = (http_code == 200) ? true : false;
@@ -622,7 +630,7 @@ InferenceServerHttpClient::IsModelReady(
   request_uri = request_uri + "/ready";
 
   long http_code;
-  rapidjson::Document response;
+  std::string response;
   err = Get(request_uri, headers, query_params, &response, &http_code);
 
   *ready = (http_code == 200) ? true : false;
@@ -633,54 +641,38 @@ InferenceServerHttpClient::IsModelReady(
 
 Error
 InferenceServerHttpClient::ServerMetadata(
-    rapidjson::Document* server_metadata, const Headers& headers,
+    std::string* server_metadata, const Headers& headers,
     const Parameters& query_params)
 {
-  Error err;
-
   std::string request_uri(url_ + "/v2");
 
   long http_code;
-  err = Get(request_uri, headers, query_params, server_metadata, &http_code);
-  if ((http_code != 200) && err.IsOk()) {
-    return Error(
-        "[INTERNAL] Request failed with missing error message in response");
-  }
-  return err;
+  return Get(request_uri, headers, query_params, server_metadata, &http_code);
 }
 
 
 Error
 InferenceServerHttpClient::ModelMetadata(
-    rapidjson::Document* model_metadata, const std::string& model_name,
+    std::string* model_metadata, const std::string& model_name,
     const std::string& model_version, const Headers& headers,
     const Parameters& query_params)
 {
-  Error err;
-
   std::string request_uri(url_ + "/v2/models/" + model_name);
   if (!model_version.empty()) {
     request_uri = request_uri + "/versions/" + model_version;
   }
 
   long http_code;
-  err = Get(request_uri, headers, query_params, model_metadata, &http_code);
-  if ((http_code != 200) && err.IsOk()) {
-    return Error(
-        "[INTERNAL] Request failed with missing error message in response");
-  }
-  return err;
+  return Get(request_uri, headers, query_params, model_metadata, &http_code);
 }
 
 
 Error
 InferenceServerHttpClient::ModelConfig(
-    rapidjson::Document* model_config, const std::string& model_name,
+    std::string* model_config, const std::string& model_name,
     const std::string& model_version, const Headers& headers,
     const Parameters& query_params)
 {
-  Error err;
-
   std::string request_uri(url_ + "/v2/models/" + model_name);
   if (!model_version.empty()) {
     request_uri = request_uri + "/versions/" + model_version;
@@ -688,12 +680,7 @@ InferenceServerHttpClient::ModelConfig(
   request_uri = request_uri + "/config";
 
   long http_code;
-  err = Get(request_uri, headers, query_params, model_config, &http_code);
-  if ((http_code != 200) && err.IsOk()) {
-    return Error(
-        "[INTERNAL] Request failed with missing error message in response");
-  }
-  return err;
+  return Get(request_uri, headers, query_params, model_config, &http_code);
 }
 
 
@@ -1453,6 +1440,94 @@ InferenceServerHttpClient::ResponseHandler(
   size_t result_bytes = size * nmemb;
   std::copy(buf, buf + result_bytes, std::back_inserter(*response_string));
   return result_bytes;
+}
+
+namespace {
+Error
+ParseErrorJson(const std::string& json_str)
+{
+  TritonJson::Value json;
+  Error err = json.Parse(json_str.c_str(), json_str.size());
+  if (!err.IsOk()) {
+    return err;
+  }
+
+  const char* errstr;
+  size_t errlen;
+  err = json.MemberAsString("error", &errstr, &errlen);
+  if (!err.IsOk()) {
+    return err;
+  }
+
+  return Error(std::move(std::string(errstr, errlen)));
+}
+
+}  // namespace
+
+Error
+InferenceServerHttpClient::Get(
+    std::string& request_uri, const Headers& headers,
+    const Parameters& query_params, std::string* response, long* http_code)
+{
+  if (!query_params.empty()) {
+    request_uri = request_uri + "?" + GetQueryString(query_params);
+  }
+
+  if (!curl_global.Status().IsOk()) {
+    return curl_global.Status();
+  }
+
+  CURL* curl = curl_easy_init();
+  if (!curl) {
+    return Error("failed to initialize HTTP client");
+  }
+
+  curl_easy_setopt(curl, CURLOPT_URL, request_uri.c_str());
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+  curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+  curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+  if (verbose_) {
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+  }
+
+  // Response data handled by ResponseHandler()
+  response->clear();
+  response->reserve(1024);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ResponseHandler);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
+
+  // Add user provided headers...
+  struct curl_slist* header_list = nullptr;
+  for (const auto& pr : headers) {
+    std::string hdr = pr.first + ": " + pr.second;
+    header_list = curl_slist_append(header_list, hdr.c_str());
+  }
+
+  if (header_list != nullptr) {
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
+  }
+
+  CURLcode res = curl_easy_perform(curl);
+  if (res != CURLE_OK) {
+    curl_slist_free_all(header_list);
+    curl_easy_cleanup(curl);
+    return Error("HTTP client failed: " + std::string(curl_easy_strerror(res)));
+  }
+
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http_code);
+
+  curl_slist_free_all(header_list);
+  curl_easy_cleanup(curl);
+
+  if (verbose_) {
+    std::cout << *response << std::endl;
+  }
+
+  if (*http_code != 200) {
+    return ParseErrorJson(*response);
+  }
+
+  return Error::Success;
 }
 
 Error
